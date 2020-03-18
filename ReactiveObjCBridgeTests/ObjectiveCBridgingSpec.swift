@@ -9,7 +9,6 @@
 import ReactiveObjC
 import ReactiveObjCBridge
 import ReactiveSwift
-import Result
 import Nimble
 import Quick
 import XCTest
@@ -72,9 +71,9 @@ class ObjectiveCBridgingSpec: QuickSpec {
 
 				let producer = SignalProducer(racSignal).map { $0 as! Int }
 
-				expect((producer.single())?.value) == 0
-				expect((producer.single())?.value) == 1
-				expect((producer.single())?.value) == 2
+				expect { try producer.single()?.get() } == 0
+				expect { try producer.single()?.get() } == 1
+				expect { try producer.single()?.get() } == 2
 			}
 
 			it("should forward errors") {
@@ -84,7 +83,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 				let producer = SignalProducer(racSignal)
 				let result = producer.last()
 
-				expect(result?.error) == AnyError(error)
+				expect { try result?.get() }.to(throwError(error))
 			}
 		}
 
@@ -94,7 +93,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 			let testNSError = NSError(domain: "TestDomain", code: 1, userInfo: userInfo)
 			describe("on a Signal") {
 				it("should forward events") {
-					let (signal, observer) = Signal<NSNumber, NoError>.pipe()
+					let (signal, observer) = Signal<NSNumber, Never>.pipe()
 					let racSignal = signal.bridged
 
 					var lastValue: NSNumber?
@@ -166,7 +165,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 				it("should start once per subscription") {
 					var subscriptions = 0
 
-					let producer = SignalProducer<NSNumber, NoError> { () -> Result<NSNumber, NoError> in
+					let producer = SignalProducer<NSNumber, Never> { () -> Result<NSNumber, Never> in
 						defer {
 							subscriptions += 1
 						}
@@ -215,7 +214,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 			var enabledSubject: RACSubject<NSNumber>!
 			var enabled = false
 
-			var action: Action<NSNumber?, NSNumber?, AnyError>!
+			var action: Action<NSNumber?, NSNumber?, Swift.Error>!
 
 			beforeEach {
 				enabledSubject = RACSubject()
@@ -238,8 +237,10 @@ class ObjectiveCBridgingSpec: QuickSpec {
 				let values = SignalProducer(command.executionSignals)
 					.map { SignalProducer($0!) }
 					.flatten(.concat)
+					.materializeResults()
+					.filterMap { try? $0.get() as? Int }
 
-				values.startWithResult { results.append($0.value as! Int) }
+				values.startWithValues { results.append($0) }
 				expect(results) == []
 
 				action = Action(command)
@@ -496,15 +497,14 @@ class ObjectiveCBridgingSpec: QuickSpec {
 					let racSignal = RACSignal<RACOneTuple<NSNumber>>.return(RACOneTuple<NSNumber>.pack(0))
 					let producer = SignalProducer(bridging: racSignal)
 
-					let value = producer.single()?.value as? (Int) ?? nil
-					expect(value) == (0)
+					expect { try producer.single()?.get() as? Int } == 0
 				}
 
 				it("should bridge signals of 2-tuples") {
 					let racSignal = RACSignal<RACTwoTuple<NSNumber, NSNumber>>.return(RACTwoTuple<NSNumber, NSNumber>.pack(0, 1))
 					let producer = SignalProducer(bridging: racSignal)
 
-					let value = producer.single()?.value ?? nil
+					let value = try? producer.single()?.get()
 					let valueMirror = value.map { Mirror(reflecting: $0) }
 					expect(valueMirror?.children.count) == 2
 					expect(value?.0) == 0
@@ -515,7 +515,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 					let racSignal = RACSignal<RACThreeTuple<NSNumber, NSNumber, NSNumber>>.return(RACThreeTuple<NSNumber, NSNumber, NSNumber>.pack(0, 1, 2))
 					let producer = SignalProducer(bridging: racSignal).skipNil()
 
-					let value = producer.single()?.value ?? nil
+					let value = try? producer.single()?.get()
 					let valueMirror = value.map { Mirror(reflecting: $0) }
 					expect(valueMirror?.children.count) == 3
 					expect(value?.0) == 0
@@ -527,7 +527,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 					let racSignal = RACSignal<RACFourTuple<NSNumber, NSNumber, NSNumber, NSNumber>>.return(RACFourTuple<NSNumber, NSNumber, NSNumber, NSNumber>.pack(0, 1, 2, 3))
 					let producer = SignalProducer(bridging: racSignal).skipNil()
 
-					let value = producer.single()?.value ?? nil
+					let value = try? producer.single()?.get()
 					let valueMirror = value.map { Mirror(reflecting: $0) }
 					expect(valueMirror?.children.count) == 4
 					expect(value?.0) == 0
@@ -540,7 +540,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 					let racSignal = RACSignal<RACFiveTuple<NSNumber, NSNumber, NSNumber, NSNumber, NSNumber>>.return(RACFiveTuple<NSNumber, NSNumber, NSNumber, NSNumber, NSNumber>.pack(0, 1, 2, 3, 4))
 					let producer = SignalProducer(bridging: racSignal).skipNil()
 
-					let value = producer.single()?.value ?? nil
+					let value = try? producer.single()?.get()
 					let valueMirror = value.map { Mirror(reflecting: $0) }
 					expect(valueMirror?.children.count) == 5
 					expect(value?.0) == 0
@@ -554,7 +554,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 					let racSignal = RACSignal<RACTuple>.return(RACTuple(objectsFrom: [0, 1]))
 					let producer = SignalProducer(racSignal).skipNil()
 
-					let value = producer.single()?.value
+					let value = try? producer.single()?.get()
 					expect(value?.count) == 2
 					expect(value?.first as? Int) == 0
 					expect(value?.second as? Int) == 1
@@ -565,7 +565,7 @@ class ObjectiveCBridgingSpec: QuickSpec {
 	}
 }
 
-extension SignalProducer where Error == NoError {
+extension SignalProducer where Error == Never {
 	/// Create a `SignalProducer` that will attempt the given operation once for
 	/// each invocation of `start()`.
 	///
@@ -575,14 +575,13 @@ extension SignalProducer where Error == NoError {
 	///
 	/// - parameters:
 	///   - action: A closure that returns instance of `Result`.
-	public init(_ action: @escaping () -> Result<Value, NoError>) {
+	public init(_ action: @escaping () -> Result<Value, Never>) {
 		self.init { observer, _ in
-			action().analysis(ifSuccess: { value in
+			switch action() {
+			case .success(let value):
 				observer.send(value: value)
 				observer.sendCompleted()
-			}, ifFailure: { error in
-				observer.send(error: error)
-			})
+			}
 		}
 	}
 }
